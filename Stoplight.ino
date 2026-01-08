@@ -9,7 +9,7 @@
 #include <freertos/semphr.h>
 // arduino-cli compile --fqbn "esp32:esp32:esp32s3:FlashMode=qio,FlashSize=4M,CDCOnBoot=cdc" --upload --port COM5 . 2>&1 | Select-String "Connecting|Wrote|Hash|Hard|ERROR" -Context 1
 
-// --- CONFIGURATIE ---
+// --- CONFIGURATION ---
 #define LED_PIN    8
 #define BUTTON_PIN 7
 #define LED_COUNT  3
@@ -22,7 +22,7 @@ Preferences preferences;
 TaskHandle_t ledTaskHandle = NULL;
 SemaphoreHandle_t stripMutex;
 
-uint8_t modeIndex = 0; // 0=uit,1=groen,2=oranje,3=rood,4=disco,5=fade
+uint8_t modeIndex = 0; // 0=off,1=green,2=orange,3=red,4=disco,5=fade
 bool wifiConnected = false;
 bool wifiSetupComplete = false;
 unsigned long wifiSetupStartTime = 0;
@@ -32,10 +32,10 @@ unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50;
 unsigned long buttonPressStartTime = 0;
 bool buttonLongPressHandled = false;
-const unsigned long LONG_PRESS_DURATION = 10000; // 10 seconden
+const unsigned long LONG_PRESS_DURATION = 10000; // 10 seconds
 
 void ledLoop(void * parameter) {
-  // Animatie state
+  // Animation state
   static unsigned long lastUpdate = 0;
   static uint16_t discoHue = 0;
   static uint8_t discoPhase = 0;
@@ -46,7 +46,7 @@ void ledLoop(void * parameter) {
   static uint16_t fadeHue = 0;
 
   for(;;) {
-    uint8_t currentMode = modeIndex; // eenvoudige, lockloze read
+    uint8_t currentMode = modeIndex; // simple lock-free read
 
     if (currentMode == 4) {
       if (!sequenceOrderInitialized) {
@@ -180,7 +180,7 @@ void ledLoop(void * parameter) {
         }
       }
     } else if (currentMode == 6) {
-      // Strobe wit
+      // White strobe
       if (millis() - lastUpdate > 100) {
         lastUpdate = millis();
         if (xSemaphoreTake(stripMutex, portMAX_DELAY)) {
@@ -196,7 +196,7 @@ void ledLoop(void * parameter) {
         }
       }
     } else if (currentMode == 7) {
-      // Looplamp: groen -> oranje -> rood -> opnieuw
+      // Loop lamp: green -> orange -> red -> repeat
       if (millis() - lastUpdate > 500) {
         lastUpdate = millis();
         if (xSemaphoreTake(stripMutex, portMAX_DELAY)) {
@@ -212,14 +212,14 @@ void ledLoop(void * parameter) {
         }
       }
     } else {
-      // Niet-animatie modes: niets doen
+      // Non-animation modes: nothing to do here
     }
 
-    delay(1); // watchdog blij houden
+    delay(1); // keep watchdog happy
   }
 }
 
-// Status LED helpers (kort voor responsiviteit)
+// Status LED helpers (short pulses for snappy feedback)
 void blinkSingle(uint8_t ledIndex, uint32_t color, uint8_t times = 2, uint16_t onMs = 80, uint16_t offMs = 60) {
   for (uint8_t t = 0; t < times; t++) {
     strip.clear();
@@ -233,19 +233,19 @@ void blinkSingle(uint8_t ledIndex, uint32_t color, uint8_t times = 2, uint16_t o
 }
 
 void signalConnected() {
-  blinkSingle(0, strip.Color(0, 255, 0)); // onderste LED groen
+  blinkSingle(0, strip.Color(0, 255, 0)); // bottom LED green
 }
 
 void signalError() {
-  blinkSingle(2, strip.Color(255, 0, 0)); // bovenste LED rood
+  blinkSingle(2, strip.Color(255, 0, 0)); // top LED red
 }
 
 void signalBusy() {
-  blinkSingle(1, strip.Color(255, 165, 0), 2, 100, 80); // middelste LED oranje
+  blinkSingle(1, strip.Color(255, 165, 0), 2, 100, 80); // middle LED orange
 }
 
 void signalSetupMode() {
-  // Alle LEDs blauw knipperend voor setup mode
+  // All LEDs blinking blue for setup mode
   for (uint8_t t = 0; t < 5; t++) {
     for (uint8_t i = 0; i < LED_COUNT; i++) {
       strip.setPixelColor(i, strip.Color(0, 0, 255));
@@ -259,10 +259,10 @@ void signalSetupMode() {
 }
 
 void resetWiFiSettings() {
-  Serial.println("WiFi reset gestart...");
+  Serial.println("WiFi reset started...");
   signalSetupMode();
   
-  // Reset WiFiManager + lokale prefs
+  // Reset WiFiManager + local prefs
   WiFi.disconnect(true, true);
   WiFi.mode(WIFI_OFF);
   delay(100);
@@ -272,7 +272,7 @@ void resetWiFiSettings() {
   preferences.putBool("force_setup", true);
   preferences.end();
 
-  Serial.println("WiFi settings gewist! ESP herstart om setup te starten...");
+  Serial.println("WiFi settings cleared! ESP restarting to start setup...");
   delay(300);
   ESP.restart();
 }
@@ -284,16 +284,16 @@ void applyMode(uint8_t idx) {
   
   strip.clear();
   switch (modeIndex) {
-    case 1: strip.setPixelColor(0, strip.Color(0, 255, 0)); break;      // groen
-    case 2: strip.setPixelColor(1, strip.Color(255, 165, 0)); break;    // oranje
-    case 3: strip.setPixelColor(2, strip.Color(255, 0, 0)); break;      // rood
+    case 1: strip.setPixelColor(0, strip.Color(0, 255, 0)); break;      // green
+    case 2: strip.setPixelColor(1, strip.Color(255, 165, 0)); break;    // orange
+    case 3: strip.setPixelColor(2, strip.Color(255, 0, 0)); break;      // red
     case 4: 
     case 5:
     case 6:
     case 7:
-      // disco, fade, strobe en looplamp worden in loop() gedaan
+      // disco, fade, strobe, and loop lamp are handled in loop()
       break;
-    default: break; // alles uit
+    default: break; // all off
   }
   if (modeIndex != 4 && modeIndex != 5 && modeIndex != 6 && modeIndex != 7) strip.show();
 }
@@ -303,14 +303,17 @@ const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html>
 <head>
   <meta charset="UTF-8">
-  <title>ESP32 Stoplicht</title>
+  <title>ESP32 Stoplight</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: white; min-height: 100vh; padding: 20px; }
     .container { max-width: 500px; margin: 0 auto; }
-    h1 { margin: 30px 0 10px 0; font-size: 32px; }
+    h1 { margin: 30px 0 10px 0; font-size: 32px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .subtitle { color: #aaa; margin-bottom: 30px; font-size: 14px; }
+    .lang-toggle { display: flex; gap: 8px; }
+    .lang-toggle button { padding: 6px 10px; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; background: rgba(255,255,255,0.05); color: white; cursor: pointer; }
+    .lang-toggle button.active { background: rgba(255,255,255,0.2); border-color: rgba(255,255,255,0.4); }
     
     section { background: rgba(255,255,255,0.05); border-radius: 15px; padding: 20px; margin: 20px 0; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
     section h2 { font-size: 18px; margin-bottom: 15px; border-bottom: 2px solid rgba(255,255,255,0.2); padding-bottom: 10px; }
@@ -347,78 +350,170 @@ const char index_html[] PROGMEM = R"rawliteral(
 </head>
 <body>
   <div class="container">
-    <h1>🚦 Stoplicht</h1>
-    <p class="subtitle">Webinterface</p>
+    <h1><span id="title-text">🚦 Stoplight</span><span class="lang-toggle"><button id="lang-en" onclick="setLanguage('en')">EN</button><button id="lang-nl" onclick="setLanguage('nl')">NL</button></span></h1>
+    <p class="subtitle" id="subtitle-text">Web interface</p>
     
     <section>
-      <h2>Directe Besturing</h2>
+      <h2 id="control-title">Direct Control</h2>
       <div class="buttons-grid">
-        <button class="button green" onclick="setMode(1)">🟢 GROEN</button>
-        <button class="button orange" onclick="setMode(2)">🟠 ORANJE</button>
-        <button class="button red" onclick="setMode(3)">🔴 ROOD</button>
-        <button class="button disco" onclick="setMode(4)">✨ DISCO</button>
-        <button class="button fade" onclick="setMode(5)">🌈 FADE</button>
-        <button class="button strobe" onclick="setMode(6)">⚡ STROBE</button>
-        <button class="button looplamp" onclick="setMode(7)">🔄 LOOP</button>
-        <button class="button off" onclick="setMode(0)">⭕ UIT</button>
+        <button id="btn-green" class="button green" onclick="setMode(1)">🟢 Green</button>
+        <button id="btn-orange" class="button orange" onclick="setMode(2)">🟠 Orange</button>
+        <button id="btn-red" class="button red" onclick="setMode(3)">🔴 Red</button>
+        <button id="btn-disco" class="button disco" onclick="setMode(4)">✨ Disco</button>
+        <button id="btn-fade" class="button fade" onclick="setMode(5)">🌈 Fade</button>
+        <button id="btn-strobe" class="button strobe" onclick="setMode(6)">⚡ Strobe</button>
+        <button id="btn-loop" class="button looplamp" onclick="setMode(7)">🔄 Loop</button>
+        <button id="btn-off" class="button off" onclick="setMode(0)">⭕ Off</button>
       </div>
     </section>
     
     <section>
-      <h2>Boot Mode (standaard)</h2>
+      <h2 id="boot-title">Boot Mode (default)</h2>
       <div class="bootmode-section">
-        <div class="bootmode-label">Standaard mode na opstarten:</div>
-        <div class="bootmode-display"><strong id="bootmode-name">laden...</strong></div>
-        <button class="button off" style="width:100%;" onclick="setBootMode(0)">⭕ UIT</button>
-        <button class="button green" style="width:100%;" onclick="setBootMode(1)">🟢 GROEN</button>
-        <button class="button orange" style="width:100%;" onclick="setBootMode(2)">🟠 ORANJE</button>
-        <button class="button red" style="width:100%;" onclick="setBootMode(3)">🔴 ROOD</button>
+        <div class="bootmode-label" id="boot-label">Default mode after boot:</div>
+        <div class="bootmode-display"><strong id="bootmode-name">loading...</strong></div>
+        <button id="btn-boot-off" class="button off" style="width:100%;" onclick="setBootMode(0)">⭕ Off</button>
+        <button id="btn-boot-green" class="button green" style="width:100%;" onclick="setBootMode(1)">🟢 Green</button>
+        <button id="btn-boot-orange" class="button orange" style="width:100%;" onclick="setBootMode(2)">🟠 Orange</button>
+        <button id="btn-boot-red" class="button red" style="width:100%;" onclick="setBootMode(3)">🔴 Red</button>
         <div id="bootmode-feedback" class="feedback full-width"></div>
       </div>
     </section>
     
     <section>
-      <h2>Instellingen</h2>
-      <button class="button reboot full-width" onclick="rebootDevice()">🔄 HERSTART APPARAAT</button>
+      <h2 id="settings-title">Settings</h2>
+      <button id="btn-reboot" class="button reboot full-width" onclick="rebootDevice()">🔄 Reboot device</button>
       <div id="reboot-feedback" class="feedback full-width"></div>
     </section>
     
-    <p class="info-text">API: /api/mode?value=[0-7] | /getBootMode | /setBootMode?mode=[0-7]</p>
+    <p class="info-text" id="info-text">API: /api/mode?value=[0-7] | /getBootMode | /setBootMode?mode=[0-7]</p>
   </div>
   
   <script>
-    const modes = ['UIT', 'GROEN', 'ORANJE', 'ROOD', 'DISCO', 'FADE', 'STROBE', 'LOOPLAMP'];
+    const translations = {
+      en: {
+        pageTitle: 'ESP32 Stoplight',
+        title: '🚦 Stoplight',
+        subtitle: 'Web interface',
+        controlTitle: 'Direct Control',
+        bootTitle: 'Boot Mode (default)',
+        bootLabel: 'Default mode after boot:',
+        settingsTitle: 'Settings',
+        rebootButton: '🔄 Reboot device',
+        info: 'API: /api/mode?value=[0-7] | /getBootMode | /setBootMode?mode=[0-7]',
+        saving: 'Saving...',
+        savedPrefix: '✓ Boot mode set to ',
+        errorPrefix: '✗ Error: ',
+        connError: '✗ Connection error',
+        rebootConfirm: 'Device will reboot and the connection will drop. Proceed?',
+        rebooting: '🔄 Device rebooting...',
+        unknown: 'unknown',
+        loading: 'loading...'
+      },
+      nl: {
+        pageTitle: 'ESP32 Stoplicht',
+        title: '🚦 Stoplicht',
+        subtitle: 'Webinterface',
+        controlTitle: 'Directe Besturing',
+        bootTitle: 'Boot Mode (standaard)',
+        bootLabel: 'Standaard mode na opstarten:',
+        settingsTitle: 'Instellingen',
+        rebootButton: '🔄 Herstart apparaat',
+        info: 'API: /api/mode?value=[0-7] | /getBootMode | /setBootMode?mode=[0-7]',
+        saving: 'Opslaan...',
+        savedPrefix: '✓ Boot mode opgeslagen als ',
+        errorPrefix: '✗ Fout: ',
+        connError: '✗ Verbindingsfout',
+        rebootConfirm: 'Apparaat wordt herstart. Verbinding wordt verbroken. Doorgaan?',
+        rebooting: '🔄 Apparaat herstart...',
+        unknown: 'onbekend',
+        loading: 'laden...'
+      }
+    };
+
+    const modeLabels = {
+      en: ['Off','Green','Orange','Red','Disco','Fade','Strobe','Loop'],
+      nl: ['Uit','Groen','Oranje','Rood','Disco','Fade','Strobe','Looplamp']
+    };
+
+    let currentLang = 'en';
+
+    function applyLanguage(lang) {
+      currentLang = translations[lang] ? lang : 'en';
+      const t = translations[currentLang];
+      const m = modeLabels[currentLang];
+      document.title = t.pageTitle;
+      document.getElementById('title-text').textContent = t.title;
+      document.getElementById('subtitle-text').textContent = t.subtitle;
+      document.getElementById('control-title').textContent = t.controlTitle;
+      document.getElementById('boot-title').textContent = t.bootTitle;
+      document.getElementById('boot-label').textContent = t.bootLabel;
+      document.getElementById('settings-title').textContent = t.settingsTitle;
+      document.getElementById('btn-reboot').textContent = t.rebootButton;
+      document.getElementById('info-text').textContent = t.info;
+      document.getElementById('bootmode-name').textContent = t.loading;
+
+      document.getElementById('btn-off').textContent = '⭕ ' + m[0];
+      document.getElementById('btn-green').textContent = '🟢 ' + m[1];
+      document.getElementById('btn-orange').textContent = '🟠 ' + m[2];
+      document.getElementById('btn-red').textContent = '🔴 ' + m[3];
+      document.getElementById('btn-disco').textContent = '✨ ' + m[4];
+      document.getElementById('btn-fade').textContent = '🌈 ' + m[5];
+      document.getElementById('btn-strobe').textContent = '⚡ ' + m[6];
+      document.getElementById('btn-loop').textContent = '🔄 ' + m[7];
+
+      document.getElementById('btn-boot-off').textContent = '⭕ ' + m[0];
+      document.getElementById('btn-boot-green').textContent = '🟢 ' + m[1];
+      document.getElementById('btn-boot-orange').textContent = '🟠 ' + m[2];
+      document.getElementById('btn-boot-red').textContent = '🔴 ' + m[3];
+
+      document.getElementById('lang-en').classList.toggle('active', currentLang === 'en');
+      document.getElementById('lang-nl').classList.toggle('active', currentLang === 'nl');
+    }
+
+    function getModes() {
+      return modeLabels[currentLang] || modeLabels.en;
+    }
+
+    function setLanguage(lang) {
+      applyLanguage(lang);
+      updateBootModeDisplay();
+    }
     
     function updateBootModeDisplay() {
+      const t = translations[currentLang];
+      const modes = getModes();
       fetch('/getBootMode')
         .then(r => r.json())
         .then(d => {
-          document.getElementById('bootmode-name').textContent = modes[d.mode] || 'onbekend';
+          document.getElementById('bootmode-name').textContent = modes[d.mode] || t.unknown;
         })
         .catch(e => console.log('Boot mode fetch error:', e));
     }
     
     function setBootMode(mode) {
+      const t = translations[currentLang];
+      const modes = getModes();
       const feedback = document.getElementById('bootmode-feedback');
       feedback.className = 'feedback';
-      feedback.textContent = 'Opslaan...';
+      feedback.textContent = t.saving;
       
       fetch('/setBootMode?mode=' + mode)
         .then(r => r.json())
         .then(d => {
           if (d.success) {
             feedback.className = 'feedback success';
-            feedback.textContent = '✓ Boot mode opgeslagen als ' + modes[mode];
+            feedback.textContent = t.savedPrefix + modes[mode];
             updateBootModeDisplay();
             setTimeout(() => { feedback.className = 'feedback'; }, 3000);
           } else {
             feedback.className = 'feedback error';
-            feedback.textContent = '✗ Fout: ' + (d.error || 'onbekend');
+            feedback.textContent = t.errorPrefix + (d.error || t.unknown);
           }
         })
         .catch(e => {
           feedback.className = 'feedback error';
-          feedback.textContent = '✗ Verbindingsfout';
+          feedback.textContent = t.connError;
         });
     }
     
@@ -429,10 +524,11 @@ const char index_html[] PROGMEM = R"rawliteral(
     }
     
     function rebootDevice() {
-      if (confirm('Apparaat wordt herstart. Verbinding gaat verbroken. Oké?')) {
+      const t = translations[currentLang];
+      if (confirm(t.rebootConfirm)) {
         const feedback = document.getElementById('reboot-feedback');
         feedback.className = 'feedback success';
-        feedback.textContent = '🔄 Apparaat herstart...';
+        feedback.textContent = t.rebooting;
         
         fetch('/reboot')
           .then(r => r.json())
@@ -440,6 +536,7 @@ const char index_html[] PROGMEM = R"rawliteral(
       }
     }
     
+    applyLanguage('en');
     updateBootModeDisplay();
   </script>
 </body>
@@ -542,7 +639,7 @@ void setup() {
   strip.setBrightness(BRIGHTNESS);
   Serial.println("Strip initialized");
 
-  // Boot blink: wit op alle LEDs
+  // Boot blink: white on all LEDs
   for (int i = 0; i < 3; i++) {
     for (uint8_t led = 0; led < LED_COUNT; led++) {
       strip.setPixelColor(led, strip.Color(50, 50, 50));
@@ -557,12 +654,12 @@ void setup() {
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   Serial.println("Button configured on GPIO7");
-  Serial.println("Houd button >10 sec ingedrukt om WiFi te resetten");
+  Serial.println("Hold button >10s to reset WiFi");
 
-  // Mutex voor veilige strip updates tussen taken
+  // Mutex for safe strip updates across tasks
   stripMutex = xSemaphoreCreateMutex();
   
-  // Start LED taak op core 0
+  // Start LED task on core 0
   xTaskCreatePinnedToCore(
     ledLoop,
     "LedTask",
@@ -573,7 +670,7 @@ void setup() {
     0
   );
 
-  // WiFi boot logica: bij bekende WiFi verbinden, anders overslaan
+  // WiFi boot logic: connect when known network exists, otherwise skip
   wifiConnected = false;
   wifiSetupActive = false;
   wifiSetupComplete = false;
@@ -589,16 +686,16 @@ void setup() {
   wifiManager.setConnectTimeout(30);
 
   if (forceSetup) {
-    Serial.println("WiFi setup mode (force_setup) gestart...");
+    Serial.println("WiFi setup mode (force_setup) started...");
     
-    // Zet LED 3 (index 2) blauw tijdens setup mode
+    // Set LED 3 (index 2) to blue during setup mode
     xSemaphoreTake(stripMutex, portMAX_DELAY);
     strip.clear();
-    strip.setPixelColor(2, strip.Color(0, 0, 255)); // Blauw
+    strip.setPixelColor(2, strip.Color(0, 0, 255)); // Blue
     strip.show();
     xSemaphoreGive(stripMutex);
     
-    // Blocking portal, LED-task blijft draaien op core 0
+    // Blocking portal; LED task keeps running on core 0
     if (wifiManager.startConfigPortal("Stoplicht-Setup")) {
       wifiConnected = true;
       Serial.println("\nWiFi connected via setup!");
@@ -622,14 +719,14 @@ void setup() {
       server.begin();
       Serial.println("Webserver started");
     } else {
-      Serial.println("WiFi setup geannuleerd/timeout - doorgaan zonder WiFi");
+      Serial.println("WiFi setup cancelled/timeout - continue without WiFi");
       signalError();
       wifiConnected = false;
     }
   } else {
-    // Alleen proberen te verbinden met opgeslagen netwerk, GEEN portal
+    // Only try to connect with stored network, NO portal
     wifiManager.setEnableConfigPortal(false);
-    Serial.println("WiFi auto-connect proberen (geen portal)...");
+    Serial.println("Trying WiFi auto-connect (no portal)...");
     if (wifiManager.autoConnect("Stoplicht-Setup")) {
       wifiConnected = true;
       Serial.println("\nWiFi connected!");
@@ -653,25 +750,25 @@ void setup() {
       server.begin();
       Serial.println("Webserver started");
     } else {
-      Serial.println("Geen opgeslagen WiFi of kon niet verbinden - doorgaan zonder WiFi");
+      Serial.println("No stored WiFi or connection failed - continuing without WiFi");
       wifiConnected = false;
     }
   }
   
-  // Load boot mode default uit preferences
+  // Load boot mode default from preferences
   preferences.begin("stoplicht", false);
   uint8_t bootMode = preferences.getUChar("boot_mode", 1); // default mode 1 (groen)
   preferences.end();
   
-  applyMode(0); // start uit
-  applyMode(bootMode); // zet default boot mode
+  applyMode(0); // start off
+  applyMode(bootMode); // set default boot mode
   Serial.println("=== READY ===\n");
 }
 
 void loop() {
-  // Geen non-blocking setup-loop meer; setup portal draait alleen op long-press met reboot
+  // No non-blocking setup loop; setup portal only runs on long-press with reboot
   
-  // Serial API: mode:0-5, status, ping, help (process FIRST for fast response)
+  // Serial API: mode:0-7, status, ping, help (process FIRST for fast response)
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
@@ -712,7 +809,7 @@ void loop() {
     server.handleClient();
   }
 
-  // LED animaties worden nu uitgevoerd in de ledLoop task op core 0
+  // LED animations now run in the ledLoop task on core 0
 
   // Button handling: short press = mode switch, long press (>10s) = WiFi reset
   static bool handled = false;
@@ -723,26 +820,26 @@ void loop() {
     lastButtonState = reading;
     
     if (reading == LOW) {
-      // Button net ingedrukt
+      // Button just pressed
       buttonPressStartTime = millis();
       buttonLongPressHandled = false;
     } else {
-      // Button losgelaten
+      // Button released
       buttonPressStartTime = 0;
     }
   }
 
-  // Check voor long-press (>10 seconden)
+  // Check for long-press (>10 seconds)
   if (reading == LOW && buttonPressStartTime > 0 && !buttonLongPressHandled) {
     unsigned long pressDuration = millis() - buttonPressStartTime;
     
     if (pressDuration >= LONG_PRESS_DURATION) {
-      // Long press gedetecteerd - Start WiFi setup mode zonder reboot
+      // Long press detected - start WiFi setup mode without reboot
       buttonLongPressHandled = true;
       Serial.println("Long press gedetecteerd - WiFi setup mode wordt gestart!");
       resetWiFiSettings();
     } else if (pressDuration >= 8000 && pressDuration % 500 < 50) {
-      // Waarschuwing vanaf 8 seconden (rode LED knippert snel)
+      // Warning from 8 seconds (red LED blinks quickly)
       strip.clear();
       strip.setPixelColor(2, strip.Color(255, 0, 0));
       strip.show();
@@ -752,12 +849,12 @@ void loop() {
     }
   }
 
-  // Normale button functionaliteit (kort drukken)
+  // Normal button behavior (short press)
   if ((millis() - lastDebounceTime) > debounceDelay) {
     if (reading == LOW && buttonPressStartTime > 0) {
       unsigned long pressDuration = millis() - buttonPressStartTime;
       
-      // Alleen mode switchen bij korte druk
+      // Only switch mode on a short press
       if (!handled && pressDuration < 1000) {
         applyMode(modeIndex + 1);
         handled = true;
@@ -767,7 +864,7 @@ void loop() {
     }
   }
 
-  // Heartbeat elke 5 sec
+  // Heartbeat every 5 seconds
   static unsigned long lastHeart = 0;
   if (millis() - lastHeart > 5000) {
     lastHeart = millis();
