@@ -1,7 +1,7 @@
 # Stoplight
 ESP32-S3 Zero traffic-light with serial and web API, plus a PowerShell WPF GUI.
 
-<img src="Examples/Stoplight%20Example.png" width="50%" alt="Stoplight Example" />
+<img src="Examples/Stoplight%20Example.png" width="30%" alt="Stoplight Example" />
 
 ## Hardware
 - Board: ESP32-S3 Zero (tested at 115200 baud)
