@@ -1,6 +1,8 @@
 # Stoplight
 ESP32-S3 Zero traffic-light with serial and web API, plus a PowerShell WPF GUI.
 
+![Stoplight Example](Examples/Stoplight%20Example.png)
+
 ## Hardware
 - Board: ESP32-S3 Zero (tested at 115200 baud)
 - LEDs: 3x WS2812/NeoPixel on GPIO 8, VCC 5V, GND common
