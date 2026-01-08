@@ -8,6 +8,7 @@ ESP32-S3 Zero traffic-light with serial and web API, plus a PowerShell WPF GUI.
 - LEDs: 3x WS2812/NeoPixel on GPIO 8, VCC 5V, GND common
 - Button: Momentary button to GPIO 7 and GND (INPUT_PULLUP). Long press (>10s) triggers Wi-Fi reset/config portal, short press cycles modes.
 - Power: 5V for LEDs, USB-C for ESP32 (or a single 5V rail if sized for LED current)
+- 3D Model: [Traffic Light Housing on Makerworld](https://makerworld.com/nl/models/1208760-traffic-light?from=search#profileId-2071991) with custom ESP32 S3 Zero base attached.
 
 ## Firmware (Arduino)
 - 8 modes: 0=Off, 1=Green, 2=Orange, 3=Red, 4=Disco, 5=Fade, 6=Strobe (white), 7=Loop (green→orange→red)
