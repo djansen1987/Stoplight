@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Stoplight Control GUI - PowerShell WPF interface for ESP32 Stoplight
 
@@ -15,7 +15,9 @@
 
 param(
     [string]$ComPort = "COM5",
-    [string]$WebApiUrl = "http://192.168.1.100"
+    [string]$WebApiUrl = "http://192.168.1.100",
+    [switch]$UseTeamsPresence,
+    [int]$PresencePollSeconds = 30
 )
 
 # CONFIG FILE
@@ -28,6 +30,8 @@ function Load-Settings {
             return @{
                 ComPort = $config.ComPort
                 WebApiUrl = $config.WebApiUrl
+                UseTeamsPresence = $config.UseTeamsPresence
+                PresencePollSeconds = $config.PresencePollSeconds
             }
         }
         catch {
@@ -37,18 +41,24 @@ function Load-Settings {
     return @{
         ComPort = $ComPort
         WebApiUrl = $WebApiUrl
+        UseTeamsPresence = $UseTeamsPresence
+        PresencePollSeconds = $PresencePollSeconds
     }
 }
 
 function Save-Settings {
     param(
         [string]$ComPort,
-        [string]$WebApiUrl
+        [string]$WebApiUrl,
+        [bool]$UseTeamsPresence,
+        [int]$PresencePollSeconds
     )
     try {
         $config = @{
             ComPort = $ComPort
             WebApiUrl = $WebApiUrl
+            UseTeamsPresence = $UseTeamsPresence
+            PresencePollSeconds = $PresencePollSeconds
             LastUpdated = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
         }
         $config | ConvertTo-Json | Set-Content $script:ConfigPath -Encoding UTF8
@@ -338,6 +348,244 @@ function Find-StoplightPort {
     return "COM5"
 }
 
+# TEAMSPRESENCE HELPERS
+function Test-GraphModulesAvailable {
+    $requiredModules = @(
+        'Microsoft.Graph.Authentication',
+        'Microsoft.Graph.CloudCommunications'
+    )
+    
+    $missing = @()
+    foreach ($module in $requiredModules) {
+        if (-not (Get-Module -ListAvailable -Name $module)) {
+            $missing += $module
+        }
+    }
+    
+    return @{
+        Available = ($missing.Count -eq 0)
+        Missing = $missing
+    }
+}
+
+function Get-PresenceScriptPath {
+    # Try multiple possible locations
+    $possiblePaths = @(
+        (Join-Path $PSScriptRoot "Get-TeamsPresenceDelegated.ps1"),
+        (Join-Path (Split-Path $PSCommandPath) "Get-TeamsPresenceDelegated.ps1"),
+        (Join-Path (Get-Location) "Get-TeamsPresenceDelegated.ps1"),
+        "C:\Git\Operations\EntraID\teams Status\Get-TeamsPresenceDelegated.ps1"
+    )
+    
+    foreach ($path in $possiblePaths) {
+        if (Test-Path $path) {
+            return $path
+        }
+    }
+    
+    # If not found, return the first option and let caller handle the error
+    return $possiblePaths[0]
+}
+
+function Map-PresenceColorToMode {
+    param([string]$Color)
+    switch ($Color) {
+        'Green' { return 1 }
+        'Red' { return 3 }
+        'Orange' { return 2 }
+        'Yellow' { return 2 }
+        default { return 2 }
+    }
+}
+
+function Set-StoplightMode {
+    param(
+        [int]$Mode,
+        [string]$Source = "Manual"
+    )
+    $result = $null
+    if ($script:CommunicationMode -eq "COM") {
+        $result = Send-ComCommand -Mode $Mode -Port $script:ComPort
+    }
+    else {
+        $result = Send-WebCommand -Mode $Mode -Url $script:WebApiUrl
+    }
+    if (-not $result.Success) {
+        if ($StatusLabel) {
+            $StatusLabel.Text = "Error: $($result.Error)"
+            $StatusLabel.Foreground = [System.Windows.Media.Brushes]::Red
+        }
+    }
+    else {
+        if ($StatusLabel) {
+            $StatusLabel.Text = "${Source}: $($ModeNames[$Mode])"
+            $StatusLabel.Foreground = [System.Windows.Media.Brushes]::Green
+        }
+    }
+    return $result
+}
+
+function Handle-PresenceUpdate {
+    param($Presence)
+    if (-not $Presence) { return }
+    $mode = Map-PresenceColorToMode -Color $Presence.Color
+    $script:PresenceLastMode = $mode
+    Set-StoplightMode -Mode $mode -Source "Teams"
+    if ($PresenceStatus) {
+        $PresenceStatus.Text = "Teams: $($Presence.Availability) / $($ModeNames[$mode])"
+        $PresenceStatus.Foreground = [System.Windows.Media.Brushes]::LightGreen
+    }
+    if ($PresenceLastUpdate) {
+        $PresenceLastUpdate.Text = "Laatste update: $($Presence.Timestamp)"
+    }
+}
+
+function Stop-PresenceMonitor {
+    if ($script:PresencePollTimer) {
+        $script:PresencePollTimer.Stop()
+    }
+    if ($script:PresenceJob) {
+        try {
+            Stop-Job -Job $script:PresenceJob -Force -ErrorAction SilentlyContinue | Out-Null
+            Remove-Job -Job $script:PresenceJob -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+        catch { }
+    }
+    $script:PresenceJob = $null
+    $script:PresenceLastMode = $null
+    if ($PresenceStatus) {
+        $PresenceStatus.Text = "Teams sync uit"
+        $PresenceStatus.Foreground = [System.Windows.Media.Brushes]::Gray
+    }
+}
+
+function Poll-PresenceJobOutput {
+    if (-not $script:PresenceJob) { return }
+    try {
+        # Check job state - it should be running
+        if ($script:PresenceJob.State -in @('Completed','Failed','Stopped')) {
+            Write-Host "Presence job ended with state: $($script:PresenceJob.State)" -ForegroundColor Yellow
+            # Try to get any error output
+            $errors = $script:PresenceJob.ChildJobs[0].Error 2>$null
+            if ($errors) {
+                Write-Host "Job errors: $errors" -ForegroundColor Red
+            }
+            Stop-PresenceMonitor
+            if ($PresenceStatus) {
+                $PresenceStatus.Text = "Teams sync stond af (job beëindigd)"
+                $PresenceStatus.Foreground = [System.Windows.Media.Brushes]::Red
+            }
+            return
+        }
+        
+        # Receive all new output from the job (without -Keep so it's consumed)
+        $outputs = Receive-Job -Job $script:PresenceJob -ErrorAction SilentlyContinue
+        foreach ($item in $outputs) {
+            if ($item -is [pscustomobject] -and $item.PSObject.Properties.Name -contains 'Availability') {
+                Handle-PresenceUpdate -Presence $item
+            }
+        }
+    }
+    catch { 
+        Write-Host "Error polling presence job: $_" -ForegroundColor Red
+    }
+}
+
+function Start-PresenceMonitor {
+    param([int]$PollSeconds)
+    
+    # Check if required modules are installed
+    $moduleCheck = Test-GraphModulesAvailable
+    if (-not $moduleCheck.Available) {
+        $missingList = $moduleCheck.Missing -join ', '
+        $message = "Microsoft Graph modules niet geïnstalleerd: $missingList`n`nInstalleer met:`nInstall-Module $($moduleCheck.Missing -join ',') -Scope CurrentUser -Force"
+        
+        if ($PresenceStatus) {
+            $PresenceStatus.Text = "Graph modules ontbreken"
+            $PresenceStatus.Foreground = [System.Windows.Media.Brushes]::Red
+        }
+        
+        Write-Host "ERROR: Required modules not installed" -ForegroundColor Red
+        Write-Host $message -ForegroundColor Yellow
+        
+        $result = [System.Windows.MessageBox]::Show(
+            $message,
+            "Microsoft Graph Modules Vereist",
+            [System.Windows.MessageBoxButton]::OK,
+            [System.Windows.MessageBoxImage]::Warning
+        )
+        
+        return
+    }
+    
+    $path = Get-PresenceScriptPath
+    if (-not (Test-Path $path)) {
+        if ($PresenceStatus) {
+            $PresenceStatus.Text = "Teams script niet gevonden: $path"
+            $PresenceStatus.Foreground = [System.Windows.Media.Brushes]::Red
+        }
+        Write-Host "ERROR: Teams script not found at: $path" -ForegroundColor Red
+        Write-Host "Searched in: PSScriptRoot=$PSScriptRoot, PSCommandPath=$PSCommandPath, CWD=$(Get-Location)" -ForegroundColor Yellow
+        return
+    }
+    
+    Stop-PresenceMonitor
+    try {
+        # Start the presence script - will authenticate on first run only
+        Write-Host "Starting Teams presence monitor from: $path" -ForegroundColor Green
+        $script:PresenceJob = Start-Job -FilePath $path -ArgumentList @($PollSeconds, 0) -ErrorAction Stop
+        if (-not $script:PresencePollTimer) {
+            $script:PresencePollTimer = New-Object System.Windows.Threading.DispatcherTimer
+            $script:PresencePollTimer.Interval = [TimeSpan]::FromSeconds(5)
+            $script:PresencePollTimer.Add_Tick({ Poll-PresenceJobOutput })
+        }
+        $script:PresencePollTimer.Start()
+        if ($PresenceStatus) {
+            $PresenceStatus.Text = "Teams sync actief (poll $PollSeconds s)"
+            $PresenceStatus.Foreground = [System.Windows.Media.Brushes]::Yellow
+        }
+    }
+    catch {
+        if ($PresenceStatus) {
+            $PresenceStatus.Text = "Fout bij starten sync: $($_.Exception.Message)"
+            $PresenceStatus.Foreground = [System.Windows.Media.Brushes]::Red
+        }
+        Write-Host "ERROR starting presence monitor: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# CREATE STOPLIGHT ICON
+function Get-StoplightIcon {
+    # Create a simple stoplight icon programmatically
+    $bmp = New-Object System.Drawing.Bitmap(16, 16)
+    $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+    
+    # Background (dark gray rectangle)
+    $bgBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(50, 50, 50))
+    $graphics.FillRectangle($bgBrush, 4, 0, 8, 16)
+    
+    # Red light (top)
+    $redBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(220, 50, 50))
+    $graphics.FillEllipse($redBrush, 5, 1, 6, 4)
+    
+    # Yellow light (middle)
+    $yellowBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 200, 0))
+    $graphics.FillEllipse($yellowBrush, 5, 6, 6, 4)
+    
+    # Green light (bottom)
+    $greenBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(50, 220, 50))
+    $graphics.FillEllipse($greenBrush, 5, 11, 6, 4)
+    
+    $graphics.Dispose()
+    $bgBrush.Dispose()
+    $redBrush.Dispose()
+    $yellowBrush.Dispose()
+    $greenBrush.Dispose()
+    
+    $icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+    return $icon
+}
+
 # LOAD WPF ASSEMBLIES
 try {
     [void][System.Reflection.Assembly]::LoadWithPartialName('presentationframework')
@@ -354,6 +602,10 @@ catch {
 $savedSettings = Load-Settings
 $ComPort = $savedSettings.ComPort
 $WebApiUrl = $savedSettings.WebApiUrl
+$UseTeamsPresence = [bool]$savedSettings.UseTeamsPresence
+if ($savedSettings.PresencePollSeconds) {
+    $PresencePollSeconds = [int]$savedSettings.PresencePollSeconds
+}
 Write-Host "Loaded settings: COM=$ComPort, Web=$WebApiUrl" -ForegroundColor Green
 
 # Keep icon reference in script scope to prevent garbage collection
@@ -433,6 +685,21 @@ $xaml = @"
             
             <Border Background="#252535" CornerRadius="12" Padding="15" Margin="0,0,0,20" BorderThickness="1" BorderBrush="#404050">
                 <StackPanel>
+                    <TextBlock Text="Teams Presence" FontSize="16" FontWeight="Bold" Margin="0,0,0,10"/>
+                    <TextBlock Text="Gebruik je Teams status om het stoplicht automatisch te zetten" FontSize="12" Foreground="#aaa" Margin="0,0,0,10"/>
+                    <CheckBox Name="ChkPresenceSync" Content="Synchroniseer met Teams" FontSize="14" Padding="6" Background="#1a1a2e" Foreground="White" BorderBrush="#404050" BorderThickness="1" Margin="0,0,0,10"/>
+                    <TextBlock Text="Poll interval (seconden):" FontSize="12" Foreground="#aaa" Margin="0,10,0,5"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <TextBox Name="TxtPollSeconds" Width="60" FontSize="12" Padding="6" Background="#1a1a2e" Foreground="White" BorderBrush="#404050" BorderThickness="1" Text="30" HorizontalAlignment="Left"/>
+                        <TextBlock Text="Standaard: 30 sec" FontSize="11" Foreground="#888" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <TextBlock Name="PresenceStatus" Text="Teams sync uit" FontSize="12" Foreground="#888888" Margin="0,5,0,0"/>
+                    <TextBlock Name="PresenceLastUpdate" Text="Laatste update: -" FontSize="11" Foreground="#666666" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Border>
+            
+            <Border Background="#252535" CornerRadius="12" Padding="15" Margin="0,0,0,20" BorderThickness="1" BorderBrush="#404050">
+                <StackPanel>
                     <TextBlock Text="Settings" FontSize="16" FontWeight="Bold" Margin="0,0,0,10"/>
                     <Button Name="BtnReboot" Content="RESTART DEVICE" Background="#9c27b0" Padding="15,15" FontSize="14" FontWeight="Bold" Foreground="White" Margin="5"/>
                     <TextBlock Name="RebootStatus" Text="" FontSize="11" Foreground="#90EE90" Margin="0,10,0,0"/>
@@ -499,6 +766,10 @@ try {
     $BtnBootRed = $window.FindName("BtnBootRed")
     $BootModeDisplay = $window.FindName("BootModeDisplay")
     $BootModeStatus = $window.FindName("BootModeStatus")
+    $ChkPresenceSync = $window.FindName("ChkPresenceSync")
+    $PresenceStatus = $window.FindName("PresenceStatus")
+    $PresenceLastUpdate = $window.FindName("PresenceLastUpdate")
+    $TxtPollSeconds = $window.FindName("TxtPollSeconds")
     $BtnReboot = $window.FindName("BtnReboot")
     $RebootStatus = $window.FindName("RebootStatus")
     Write-Host "UI controls loaded" -ForegroundColor Green
@@ -512,6 +783,11 @@ catch {
 $script:CommunicationMode = "COM"
 $script:ComPort = $ComPort
 $script:WebApiUrl = $WebApiUrl
+$script:UseTeamsPresence = [bool]$UseTeamsPresence
+$script:PresencePollSeconds = $PresencePollSeconds
+$script:PresenceJob = $null
+$script:PresencePollTimer = $null
+$script:PresenceLastMode = $null
 $script:notifyIcon = $null
 
 # FUNCTIONS
@@ -612,22 +888,7 @@ function OnModeClick {
     }
     
     $mode = $modeMap[$sender]
-    
-    if ($script:CommunicationMode -eq "COM") {
-        $result = Send-ComCommand -Mode $mode -Port $script:ComPort
-    }
-    else {
-        $result = Send-WebCommand -Mode $mode -Url $script:WebApiUrl
-    }
-    
-    if (-not $result.Success) {
-        $StatusLabel.Text = "Error: $($result.Error)"
-        $StatusLabel.Foreground = [System.Windows.Media.Brushes]::Red
-    }
-    else {
-        $StatusLabel.Text = "Set: $($ModeNames[$mode])"
-        $StatusLabel.Foreground = [System.Windows.Media.Brushes]::Green
-    }
+    Set-StoplightMode -Mode $mode -Source "Manual"
 }
 
 function OnBootModeClick {
@@ -661,37 +922,29 @@ function Refresh-BootModeDisplay {
     $BootModeDisplay.Text = $ModeNames[$mode]
 }
 
-# CREATE STOPLIGHT ICON
-function Get-StoplightIcon {
-    # Create a simple stoplight icon programmatically
-    $bmp = New-Object System.Drawing.Bitmap(16, 16)
-    $graphics = [System.Drawing.Graphics]::FromImage($bmp)
-    
-    # Background (dark gray rectangle)
-    $bgBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(50, 50, 50))
-    $graphics.FillRectangle($bgBrush, 4, 0, 8, 16)
-    
-    # Red light (top)
-    $redBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(220, 50, 50))
-    $graphics.FillEllipse($redBrush, 5, 1, 6, 4)
-    
-    # Yellow light (middle)
-    $yellowBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 200, 0))
-    $graphics.FillEllipse($yellowBrush, 5, 6, 6, 4)
-    
-    # Green light (bottom)
-    $greenBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(50, 220, 50))
-    $graphics.FillEllipse($greenBrush, 5, 11, 6, 4)
-    
-    $graphics.Dispose()
-    $bgBrush.Dispose()
-    $redBrush.Dispose()
-    $yellowBrush.Dispose()
-    $greenBrush.Dispose()
-    
-    $icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
-    return $icon
+function OnPresenceSyncChanged {
+    if ($ChkPresenceSync.IsChecked) {
+        # Validate poll seconds input
+        $pollInput = $TxtPollSeconds.Text
+        if (-not [int]::TryParse($pollInput, [ref]$script:PresencePollSeconds)) {
+            $script:PresencePollSeconds = 30
+            $TxtPollSeconds.Text = "30"
+        }
+        else {
+            $script:PresencePollSeconds = [int]$pollInput
+        }
+        
+        $script:UseTeamsPresence = $true
+        Save-Settings -ComPort $script:ComPort -WebApiUrl $script:WebApiUrl -UseTeamsPresence $script:UseTeamsPresence -PresencePollSeconds $script:PresencePollSeconds
+        Start-PresenceMonitor -PollSeconds $script:PresencePollSeconds
+    }
+    else {
+        $script:UseTeamsPresence = $false
+        Stop-PresenceMonitor
+        Save-Settings -ComPort $script:ComPort -WebApiUrl $script:WebApiUrl -UseTeamsPresence $script:UseTeamsPresence -PresencePollSeconds $script:PresencePollSeconds
+    }
 }
+
 
 # SYSTEM TRAY SETUP
 function Initialize-SystemTray {
@@ -760,6 +1013,8 @@ $window.Add_Closing({
         $script:notifyIcon.Dispose()
     }
     
+    Stop-PresenceMonitor
+    
     # Force application shutdown
     [System.Windows.Application]::Current.Shutdown()
     
@@ -770,12 +1025,12 @@ $window.Add_Closing({
 # REGISTER EVENTS
 $TxtComPort.Add_TextChanged({
     $script:ComPort = $TxtComPort.Text
-    Save-Settings -ComPort $script:ComPort -WebApiUrl $script:WebApiUrl
+    Save-Settings -ComPort $script:ComPort -WebApiUrl $script:WebApiUrl -UseTeamsPresence $script:UseTeamsPresence -PresencePollSeconds $script:PresencePollSeconds
 })
 
 $TxtWebApiUrl.Add_TextChanged({
     $script:WebApiUrl = $TxtWebApiUrl.Text
-    Save-Settings -ComPort $script:ComPort -WebApiUrl $script:WebApiUrl
+    Save-Settings -ComPort $script:ComPort -WebApiUrl $script:WebApiUrl -UseTeamsPresence $script:UseTeamsPresence -PresencePollSeconds $script:PresencePollSeconds
 })
 
 $BtnComMode.Add_Click({ OnCommunicationModeChanged $BtnComMode })
@@ -794,6 +1049,17 @@ $BtnBootOff.Add_Click({ OnBootModeClick $BtnBootOff })
 $BtnBootGreen.Add_Click({ OnBootModeClick $BtnBootGreen })
 $BtnBootOrange.Add_Click({ OnBootModeClick $BtnBootOrange })
 $BtnBootRed.Add_Click({ OnBootModeClick $BtnBootRed })
+
+$ChkPresenceSync.Add_Checked({ OnPresenceSyncChanged })
+$ChkPresenceSync.Add_Unchecked({ OnPresenceSyncChanged })
+
+$TxtPollSeconds.Add_TextChanged({
+    $newPollSeconds = 0
+    if ([int]::TryParse($TxtPollSeconds.Text, [ref]$newPollSeconds)) {
+        $script:PresencePollSeconds = $newPollSeconds
+        Save-Settings -ComPort $script:ComPort -WebApiUrl $script:WebApiUrl -UseTeamsPresence $script:UseTeamsPresence -PresencePollSeconds $script:PresencePollSeconds
+    }
+})
 
 $BtnReboot.Add_Click({
     $result = [System.Windows.MessageBox]::Show("Restart device?", "Confirm", [System.Windows.MessageBoxButton]::OKCancel)
@@ -822,8 +1088,13 @@ $BtnReboot.Add_Click({
 # INITIALIZATION
 $TxtComPort.Text = $ComPort
 $TxtWebApiUrl.Text = $WebApiUrl
+$TxtPollSeconds.Text = $PresencePollSeconds
+$ChkPresenceSync.IsChecked = $UseTeamsPresence
 Update-ConnectionStatus
 Refresh-BootModeDisplay
+if ($UseTeamsPresence) {
+    Start-PresenceMonitor -PollSeconds $script:PresencePollSeconds
+}
 
 # Auto-detect COM port
 if ($ComPort -eq "COM5") {
